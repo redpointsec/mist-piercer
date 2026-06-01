@@ -2170,3 +2170,29 @@ git status
 - **Spec coverage:** burp parse (T3), identify/extract LLM (T11/T12), generate baselines (T4), four detectors (T6–T9), replay + safeguards `--confirm`/`--scope`/`--dry-run`/`--rate`/`--header` (T13/T14/T16), console+JSON report (T15), config defaulting to `qwen.qwen3-next-80b-a3b` (T10), delete prototypes (T17). CLAUDE.md/README.md intentionally deferred to a later phase.
 - **Determinism:** every verdict comes from a deterministic detector; the LLM only nominates/extracts (T11/T12 use injected fakes in tests — no live model needed to pass the suite).
 - **Network isolation:** `send_request` is the single network function and is monkeypatched in all replay tests.
+
+---
+
+## Post-Implementation Review Fixes
+
+During subagent-driven execution, code-quality reviews caught issues that corrected the
+plan as written. The committed code is authoritative; recorded here so the plan isn't
+misleading:
+
+- **Detectors (status/content):** status now returns INCONCLUSIVE when there is no strict
+  majority (tie no longer order-dependent); content returns NOT_DETECTED when bodies are
+  ≥0.98 similar (near-identical no longer flagged VULNERABLE).
+- **Reflected identifiers (I1):** `http_tester._redact` strips the injected identifier value
+  from response bodies before detectors run, preventing reflected-value false positives.
+- **Request substitution:** `parse_qsl(..., keep_blank_values=True)` so blank-valued params
+  aren't dropped; `path` substitution replaces only the last path segment (via
+  urlsplit/urlunsplit) instead of a global `str.replace`, and `extract_param_value` returns
+  the last path segment for `path` candidates; `_quote_safe_at` honors the passed `safe` arg
+  (`safe + "@"`) so email `@` stays unencoded on Python 3.14.
+- **`--dry-run` safety (CRITICAL):** the plan's `test_candidate` omitted `dry_run`, so
+  `--dry-run` still sent live HTTP. Fixed: `test_candidate` takes `dry_run` and forwards it
+  to both `replay` calls; `_run_tests` passes `dry_run=args.dry_run`. Regression test
+  `test_dry_run_sends_no_network` asserts zero network calls.
+- **Out-of-scope handling:** out-of-scope candidates are skipped (fail-closed) and the run
+  continues; rc 3 only when nothing in scope was tested. `_parse_headers` warns on a
+  malformed `--header`; unused `findings_to_dicts` import removed.
