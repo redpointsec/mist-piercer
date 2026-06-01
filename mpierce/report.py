@@ -1,4 +1,5 @@
 # mpierce/report.py
+import io
 import json
 
 from rich.console import Console
@@ -41,7 +42,7 @@ def write_json_report(findings: list[Finding], path: str) -> None:
 def render_console(findings: list[Finding], console: Console | None = None) -> str:
     """Render findings to a rich table and return the text (also prints if console
     given)."""
-    capture_console = console or Console(record=True, width=120)
+    capture_console = console or Console(record=True, width=120, file=io.StringIO())
     for f in findings:
         table = Table(title=f"{f.candidate.method} {f.candidate.path}  "
                             f"[{f.candidate.location}] param={f.identifier_param}")

@@ -32,3 +32,11 @@ def test_render_console_returns_text():
     text = render_console([_finding()])
     assert "/login" in text
     assert "VULNERABLE" in text
+
+
+def test_render_console_does_not_write_stdout(capsys):
+    text = render_console([_finding()])
+    captured = capsys.readouterr()
+    assert captured.out == ""       # capture path must NOT write to stdout
+    assert "/login" in text         # content is returned instead
+    assert "VULNERABLE" in text
