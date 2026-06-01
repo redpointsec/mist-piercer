@@ -1,0 +1,8 @@
+langchain-aws
+langchain-core
+langchain-community
+boto3
+python-dotenv
+requests
+rich
+pytest
