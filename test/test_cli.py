@@ -44,6 +44,21 @@ def test_test_blocks_out_of_scope(monkeypatch, capsys):
     assert "scope" in capsys.readouterr().out.lower()
 
 
+def test_dry_run_sends_no_network(monkeypatch):
+    monkeypatch.setattr(cli, "parse_session", lambda p: _exchanges())
+    monkeypatch.setattr(cli, "_load_candidates", lambda a, ex: [
+        Candidate("POST", "https://vtm.rdpt.dev/login", "/login", "login",
+                  "email", "form", "r")])
+    monkeypatch.setattr(cli, "_load_identifiers", lambda a, ex: [
+        Identifier("jl@rdpt.io", "email", "/login")])
+    from mpierce import http_tester
+    def boom(req, timeout=10.0):
+        raise AssertionError("network called during --dry-run")
+    monkeypatch.setattr(http_tester, "send_request", boom)
+    rc = cli.main(["test", "-x", "s.xml", "--scope", "vtm.rdpt.dev", "--dry-run"])
+    assert rc == 0   # dry-run completes without calling send_request
+
+
 def test_identify_writes_candidates(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "parse_session", lambda p: _exchanges())
     monkeypatch.setattr(cli, "identify_candidates", lambda ex: [

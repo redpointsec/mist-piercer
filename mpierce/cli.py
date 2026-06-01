@@ -9,7 +9,7 @@ from .extract import extract_identifiers
 from .generate import random_email, random_username
 from .http_tester import in_scope, extract_param_value, test_candidate
 from .models import Candidate, Identifier
-from .report import findings_to_dicts, write_json_report, render_console
+from .report import write_json_report, render_console
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +57,8 @@ def _parse_headers(header_args: list[str]) -> dict:
         if ":" in h:
             name, _, value = h.partition(":")
             headers[name.strip()] = value.strip()
+        else:
+            print(f"Ignoring malformed --header (expected 'Name: Value'): {h!r}")
     return headers
 
 
@@ -116,24 +118,30 @@ def _run_tests(args, exchanges) -> int:
         return 2
 
     findings = []
+    skipped = 0
     headers = _parse_headers(args.header)
     for cand in candidates:
         ex = by_path.get(cand.path)
         if ex is None:
             continue
         if not in_scope(ex.host, allowed):
-            print(f"Skipping out-of-scope host {ex.host} (not in scope {allowed}).")
-            return 3
+            print(f"Skipping out-of-scope host {ex.host} (allowed: {allowed}).")
+            skipped += 1
+            continue
         valid_value, nonexistent_value = _pick_value(cand, identifiers, ex)
         finding = test_candidate(ex, cand, valid_value, nonexistent_value,
                                  samples=args.samples, rate=args.rate,
-                                 timeout=args.timeout, extra_headers=headers)
+                                 timeout=args.timeout, extra_headers=headers,
+                                 dry_run=args.dry_run)
         findings.append(finding)
 
     print(render_console(findings))
     if args.output:
         write_json_report(findings, args.output)
         print(f"Wrote report to {args.output}")
+    if not findings and skipped:
+        print("No in-scope candidates were tested.")
+        return 3
     return 0
 
 

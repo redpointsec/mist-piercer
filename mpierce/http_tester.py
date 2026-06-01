@@ -141,16 +141,20 @@ def _redact(responses: list[Response], token: str,
 def test_candidate(exchange: HttpExchange, candidate: Candidate,
                    valid_value: str, nonexistent_value: str,
                    samples: int = 5, rate: float = 3.0, timeout: float = 10.0,
-                   extra_headers: dict | None = None) -> Finding:
+                   extra_headers: dict | None = None, dry_run: bool = False) -> Finding:
     """Replay valid vs nonexistent value and run every detector.
 
     Each side's response bodies are redacted of the injected identifier value
-    so detectors compare structure/messages, not the echoed value itself."""
+    so detectors compare structure/messages, not the echoed value itself.
+    When dry_run is True, replay sends nothing and returns [], so every detector
+    reports INCONCLUSIVE."""
     valid = _redact(
-        replay(exchange, candidate, valid_value, samples, rate, timeout, extra_headers),
+        replay(exchange, candidate, valid_value, samples, rate, timeout,
+               extra_headers, dry_run=dry_run),
         valid_value)
     nonexistent = _redact(
-        replay(exchange, candidate, nonexistent_value, samples, rate, timeout, extra_headers),
+        replay(exchange, candidate, nonexistent_value, samples, rate, timeout,
+               extra_headers, dry_run=dry_run),
         nonexistent_value)
     verdicts = [d.detect(valid, nonexistent) for d in get_detectors()]
     return Finding(candidate=candidate, identifier_param=candidate.identifier_param,
