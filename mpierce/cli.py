@@ -41,6 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--samples", type=int, default=5)
         p.add_argument("--rate", type=float, default=3.0)
         p.add_argument("--timeout", type=float, default=10.0)
+        p.add_argument("--max-values", type=int, default=25,
+                       help="max known values to test per candidate")
         p.add_argument("--output", help="write JSON report to this path")
 
     p_test = sub.add_parser("test", help="live-test candidates for enumeration")
@@ -66,7 +68,9 @@ def _load_candidates(args, exchanges) -> list[Candidate]:
     if getattr(args, "candidates", None):
         with open(args.candidates) as fh:
             data = json.load(fh)
-        by_path = {e.path: e for e in exchanges}
+        by_path = {}
+        for e in exchanges:
+            by_path.setdefault(e.path, e)
         out = []
         for c in data:
             ex = by_path.get(c["path"])
@@ -96,24 +100,30 @@ def _nonexistent_like(valid: str) -> str:
     return random_username("test")
 
 
-def _pick_value(candidate: Candidate, identifiers: list[Identifier],
-                exchange) -> tuple[str, str]:
-    """Return (valid_value, nonexistent_value) for a candidate.
+def _pick_values(candidate: Candidate, identifiers: list[Identifier],
+                 exchange) -> tuple[list[str], str]:
+    """Return (known_values, nonexistent_baseline) for a candidate.
 
-    The value actually captured for this param is, by definition, valid for
-    this endpoint — prefer it. Then an identifier captured from the same
-    endpoint, then any identifier, then a safe default."""
-    valid = extract_param_value(exchange, candidate)
-    if not valid:
-        for ident in identifiers:
-            if ident.source == candidate.path:
-                valid = ident.value
-                break
-    if not valid and identifiers:
-        valid = identifiers[0].value
-    if not valid:
-        valid = "test@example.com"
-    return valid, _nonexistent_like(valid)
+    Known values = supplied identifiers shaped like this param, plus the value
+    actually captured for the param. The baseline is shaped to match so only
+    existence varies between a known value and the baseline."""
+    captured = extract_param_value(exchange, candidate)
+    shape = captured or (identifiers[0].value if identifiers else "test@example.com")
+
+    def fits(v: str) -> bool:
+        if "@" in shape:
+            return "@" in v
+        if shape.isdigit():
+            return v.isdigit()
+        return True
+
+    known = [i.value for i in identifiers if fits(i.value)]
+    if captured and fits(captured):
+        known.append(captured)
+    known = list(dict.fromkeys(known))   # dedup, preserve order
+    if not known:
+        known = [shape]
+    return known, _nonexistent_like(known[0])
 
 
 def _run_tests(args, exchanges) -> int:
@@ -123,7 +133,9 @@ def _run_tests(args, exchanges) -> int:
     except json.JSONDecodeError as exc:
         print(f"Could not parse JSON input: {exc}")
         return 4
-    by_path = {e.path: e for e in exchanges}
+    by_path = {}
+    for e in exchanges:
+        by_path.setdefault(e.path, e)
 
     hosts = {e.host for e in exchanges}
     allowed = args.scope or list(hosts)
@@ -144,8 +156,12 @@ def _run_tests(args, exchanges) -> int:
             print(f"Skipping out-of-scope host {ex.host} (allowed: {allowed}).")
             skipped += 1
             continue
-        valid_value, nonexistent_value = _pick_value(cand, identifiers, ex)
-        finding = test_candidate(ex, cand, valid_value, nonexistent_value,
+        known_values, nonexistent_value = _pick_values(cand, identifiers, ex)
+        if len(known_values) > args.max_values:
+            print(f"Testing first {args.max_values} of {len(known_values)} "
+                  f"values for {cand.path} (raise with --max-values)")
+            known_values = known_values[:args.max_values]
+        finding = test_candidate(ex, cand, known_values, nonexistent_value,
                                  samples=args.samples, rate=args.rate,
                                  timeout=args.timeout, extra_headers=headers,
                                  dry_run=args.dry_run)

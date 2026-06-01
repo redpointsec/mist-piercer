@@ -28,24 +28,20 @@ def test_replay_collects_samples(monkeypatch):
     assert len(calls) == 3
 
 
-def test_test_candidate_produces_finding(monkeypatch):
-    # valid email → 200 "welcome"; nonexistent → 404 "user not found"
+def test_test_candidate_flags_enumerable_value(monkeypatch):
+    # registered email → 302; everything else → 200 "user not found"
     def fake_send(req, timeout):
         if "jl@rdpt.io" in req["body"]:
-            return Response(status=200, headers={}, body="welcome", elapsed_ms=400.0)
-        return Response(status=404, headers={}, body="user not found", elapsed_ms=40.0)
+            return Response(status=302, headers={}, body="", elapsed_ms=20.0)
+        return Response(status=200, headers={}, body="user not found", elapsed_ms=20.0)
     monkeypatch.setattr(http_tester, "send_request", fake_send)
-
     finding = http_tester.test_candidate(
-        _ex(), _cand(),
-        valid_value="jl@rdpt.io", nonexistent_value="zzz@none.com",
-        samples=5, rate=1000,
-    )
-    signals = {v.signal: v.verdict for v in finding.verdicts}
-    assert signals["status"] == Verdict.VULNERABLE
-    assert signals["content"] == Verdict.VULNERABLE
-    assert finding.valid_value == "jl@rdpt.io"
-    assert len(finding.verdicts) == 4   # all detectors ran
+        _ex(), _cand(), known_values=["jl@rdpt.io", "ghost@none.com"],
+        nonexistent_value="zzz@none.com", samples=3, rate=1000)
+    by_value = {r.value: r for r in finding.results}
+    assert by_value["jl@rdpt.io"].enumerable is True       # 302 vs baseline 200
+    assert by_value["ghost@none.com"].enumerable is False  # 200 == baseline 200
+    assert len(by_value["jl@rdpt.io"].verdicts) == 4       # all detectors ran
 
 
 def test_dry_run_does_not_send(monkeypatch):
@@ -58,20 +54,19 @@ def test_dry_run_does_not_send(monkeypatch):
 
 
 def test_reflected_identifier_is_redacted(monkeypatch):
-    # the app merely echoes the submitted value; bodies are otherwise identical.
-    # after redaction both read "No results for <IDENTIFIER>" → not a real signal.
+    # app echoes the submitted value; bodies otherwise identical → not enumerable
     def fake_send(req, timeout):
         value = req["body"].split("email=")[1].split("&")[0]
         return Response(status=200, headers={}, body=f"No results for {value}",
                         elapsed_ms=10.0)
     monkeypatch.setattr(http_tester, "send_request", fake_send)
     finding = http_tester.test_candidate(
-        _ex(), _cand(),
-        valid_value="jl@rdpt.io", nonexistent_value="zzz@none.com",
-        samples=3, rate=1000,
-    )
-    signals = {v.signal: v.verdict for v in finding.verdicts}
-    assert signals["content"] == Verdict.NOT_DETECTED
+        _ex(), _cand(), known_values=["jl@rdpt.io"],
+        nonexistent_value="zzz@none.com", samples=3, rate=1000)
+    r = finding.results[0]
+    content = next(v for v in r.verdicts if v.signal == "content")
+    assert content.verdict == Verdict.NOT_DETECTED
+    assert r.enumerable is False
 
 
 def test_send_request_error_returns_response_with_error(monkeypatch):

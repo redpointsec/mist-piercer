@@ -63,9 +63,20 @@ class SignalVerdict:
 
 
 @dataclass
+class ValueResult:
+    value: str
+    verdicts: list = field(default_factory=list)   # list[SignalVerdict]
+
+    @property
+    def enumerable(self) -> bool:
+        """True when this value's responses differ from the nonexistent
+        baseline on any signal (i.e. the app reveals it exists)."""
+        return any(v.verdict == Verdict.VULNERABLE for v in self.verdicts)
+
+
+@dataclass
 class Finding:
     candidate: Candidate
     identifier_param: str
-    valid_value: str
     nonexistent_value: str
-    verdicts: list = field(default_factory=list)
+    results: list = field(default_factory=list)   # list[ValueResult]
