@@ -42,6 +42,12 @@ class ContentDetector:
             return SignalVerdict(self.name, Verdict.NOT_DETECTED, "high",
                                  "normalized response bodies are identical")
         ratio = difflib.SequenceMatcher(None, v_body, n_body).ratio()
+        if ratio >= 0.98:
+            return SignalVerdict(
+                self.name, Verdict.NOT_DETECTED, "medium",
+                f"bodies near-identical (similarity {ratio:.2f}); "
+                f"difference likely incidental",
+            )
         confidence = "high" if ratio < 0.9 else "medium"
         return SignalVerdict(
             self.name, Verdict.VULNERABLE, confidence,

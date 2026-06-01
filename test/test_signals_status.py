@@ -28,3 +28,10 @@ def test_all_errors_inconclusive():
     err = Response(status=None, headers={}, body="", elapsed_ms=0.0, error="timeout")
     v = d.detect([err], [err])
     assert v.verdict == Verdict.INCONCLUSIVE
+
+
+def test_status_no_majority_inconclusive():
+    d = StatusDetector()
+    # valid side is a 50/50 mix — no strict majority → cannot conclude
+    v = d.detect([_r(200), _r(200), _r(404), _r(404)], [_r(200), _r(200)])
+    assert v.verdict == Verdict.INCONCLUSIVE

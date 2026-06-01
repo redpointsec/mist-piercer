@@ -32,3 +32,10 @@ def test_empty_bodies_inconclusive():
     d = ContentDetector()
     v = d.detect([_r("")], [_r("")])
     assert v.verdict == Verdict.INCONCLUSIVE
+
+
+def test_near_identical_bodies_not_detected():
+    d = ContentDetector()
+    big = "the account page is here " * 40   # large, stable body
+    v = d.detect([_r(big + "aaaa")], [_r(big + "bbbb")])
+    assert v.verdict == Verdict.NOT_DETECTED   # >=0.98 similar → incidental

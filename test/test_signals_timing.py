@@ -29,3 +29,17 @@ def test_too_few_samples_inconclusive():
     d = TimingDetector()
     v = d.detect([_r(400)], [_r(40)])
     assert v.verdict == Verdict.INCONCLUSIVE
+
+
+def test_delta_passes_but_ratio_fails_not_detected():
+    d = TimingDetector()
+    # delta 60ms (>=50) but ratio 1.2x (<1.5) → not enough
+    v = d.detect([_r(360), _r(360), _r(360)], [_r(300), _r(300), _r(300)])
+    assert v.verdict == Verdict.NOT_DETECTED
+
+
+def test_ratio_passes_but_delta_fails_not_detected():
+    d = TimingDetector()
+    # ratio 2x (>=1.5) but delta only 20ms (<50) → not enough
+    v = d.detect([_r(40), _r(40), _r(40)], [_r(20), _r(20), _r(20)])
+    assert v.verdict == Verdict.NOT_DETECTED

@@ -5,22 +5,25 @@ from typing import Optional
 from ..models import Response, SignalVerdict, Verdict
 
 
-def _dominant_status(responses: list[Response]) -> Optional[int]:
+def _majority_status(responses: list[Response]) -> Optional[int]:
+    """Return the status code only if it holds a STRICT majority of the clean
+    responses; otherwise None (no clear signal — likely a flaky endpoint)."""
     codes = [r.status for r in responses if r.status is not None]
     if not codes:
         return None
-    return Counter(codes).most_common(1)[0][0]
+    code, count = Counter(codes).most_common(1)[0]
+    return code if count > len(codes) / 2 else None
 
 
 class StatusDetector:
     name = "status"
 
     def detect(self, valid: list[Response], nonexistent: list[Response]) -> SignalVerdict:
-        v_code = _dominant_status(valid)
-        n_code = _dominant_status(nonexistent)
+        v_code = _majority_status(valid)
+        n_code = _majority_status(nonexistent)
         if v_code is None or n_code is None:
             return SignalVerdict(self.name, Verdict.INCONCLUSIVE, "low",
-                                 "no successful responses to compare")
+                                 "no clear majority status to compare")
         if v_code != n_code:
             return SignalVerdict(
                 self.name, Verdict.VULNERABLE, "high",
