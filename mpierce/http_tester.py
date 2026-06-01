@@ -8,7 +8,7 @@ import requests
 
 # urlencode passes safe as a positional arg to quote_via; we override it to
 # keep '@' unencoded so email-address values remain human-readable in payloads.
-_quote_safe_at = lambda s, safe, encoding=None, errors=None: quote(s, safe="@", encoding=encoding, errors=errors)
+_quote_safe_at = lambda s, safe, encoding=None, errors=None: quote(s, safe=safe + "@", encoding=encoding, errors=errors)
 
 from .models import Candidate, Finding, HttpExchange, Response
 from .signals import get_detectors
@@ -26,18 +26,19 @@ def extract_param_value(exchange: HttpExchange, candidate: Candidate) -> str | N
         except (ValueError, AttributeError):
             return None
     if loc == "form":
-        for k, v in parse_qsl(exchange.request_body or ""):
+        for k, v in parse_qsl(exchange.request_body or "", keep_blank_values=True):
             if k == param:
                 return v
         return None
     if loc == "query":
         q = urlsplit(exchange.url).query
-        for k, v in parse_qsl(q):
+        for k, v in parse_qsl(q, keep_blank_values=True):
             if k == param:
                 return v
         return None
     if loc == "path":
-        return None  # path substitution handled positionally in build_request
+        segments = [s for s in urlsplit(exchange.url).path.split("/") if s]
+        return segments[-1] if segments else None
     return None
 
 
@@ -61,18 +62,22 @@ def build_request(exchange: HttpExchange, candidate: Candidate, new_value: str,
         except ValueError:
             pass
     elif loc == "form":
-        pairs = parse_qsl(body)
+        pairs = parse_qsl(body, keep_blank_values=True)
         pairs = [(k, new_value if k == param else v) for k, v in pairs]
         body = urlencode(pairs, quote_via=_quote_safe_at)
     elif loc == "query":
         parts = urlsplit(url)
-        pairs = parse_qsl(parts.query)
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
         pairs = [(k, new_value if k == param else v) for k, v in pairs]
         url = urlunsplit(parts._replace(query=urlencode(pairs, quote_via=_quote_safe_at)))
     elif loc == "path":
-        old = extract_param_value(exchange, candidate)
-        if old:
-            url = url.replace(old, new_value)
+        parts = urlsplit(url)
+        segments = parts.path.split("/")
+        for idx in range(len(segments) - 1, -1, -1):
+            if segments[idx]:                 # replace the last non-empty segment only
+                segments[idx] = new_value
+                break
+        url = urlunsplit(parts._replace(path="/".join(segments)))
 
     return {"method": candidate.method, "url": url, "headers": headers, "body": body}
 

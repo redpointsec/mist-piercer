@@ -54,3 +54,49 @@ def test_build_request_substitutes_query():
 def test_in_scope():
     assert in_scope("vtm.rdpt.dev", ["vtm.rdpt.dev"]) is True
     assert in_scope("evil.com", ["vtm.rdpt.dev"]) is False
+
+
+import json as _json
+from mpierce.models import Candidate as _Candidate
+
+
+def _path_cand():
+    return _Candidate(method="GET", url="https://h/users/joe", path="/users/joe",
+                      location="account-lookup", identifier_param="user",
+                      param_location="path", reason="")
+
+
+def test_extract_param_value_from_path():
+    ex = _ex("GET", "/users/joe", "")
+    assert extract_param_value(ex, _path_cand()) == "joe"
+
+
+def test_build_request_substitutes_path_segment():
+    ex = _ex("GET", "/users/joe", "")
+    req = build_request(ex, _path_cand(), "zzznope")
+    assert req["url"].endswith("/users/zzznope")
+    assert "joe" not in req["url"]
+
+
+def test_path_substitution_leaves_query_untouched():
+    ex = _ex("GET", "/users/joe", "", query="ref=joe")
+    cand = _Candidate(method="GET", url="https://h/users/joe?ref=joe",
+                      path="/users/joe", location="account-lookup",
+                      identifier_param="user", param_location="path", reason="")
+    req = build_request(ex, cand, "zzznope")
+    assert "/users/zzznope" in req["url"]
+    assert "ref=joe" in req["url"]   # query's "joe" must NOT be clobbered
+
+
+def test_build_request_substitutes_blank_form_value():
+    ex = _ex("POST", "/login", "email=&password=x")
+    req = build_request(ex, _cand("email", "form"), "zzz@none.com")
+    assert "zzz@none.com" in req["body"]   # blank value still substituted
+    assert "password=x" in req["body"]
+
+
+def test_build_request_substitutes_json_body():
+    ex = _ex("POST", "/login", '{"email":"jl@rdpt.io","password":"x"}')
+    req = build_request(ex, _cand("email", "json"), "zzz@none.com")
+    assert _json.loads(req["body"])["email"] == "zzz@none.com"
+    assert _json.loads(req["body"])["password"] == "x"

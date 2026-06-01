@@ -72,3 +72,14 @@ def test_reflected_identifier_is_redacted(monkeypatch):
     )
     signals = {v.signal: v.verdict for v in finding.verdicts}
     assert signals["content"] == Verdict.NOT_DETECTED
+
+
+def test_send_request_error_returns_response_with_error(monkeypatch):
+    import requests
+    def boom(*args, **kwargs):
+        raise requests.RequestException("boom")
+    monkeypatch.setattr(http_tester.requests, "request", boom)
+    r = http_tester.send_request({"method": "GET", "url": "https://x",
+                                  "headers": {}, "body": ""})
+    assert r.status is None
+    assert r.error is not None
