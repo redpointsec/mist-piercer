@@ -68,12 +68,9 @@ def _load_candidates(args, exchanges) -> list[Candidate]:
     if getattr(args, "candidates", None):
         with open(args.candidates) as fh:
             data = json.load(fh)
-        by_path = {}
-        for e in exchanges:
-            by_path.setdefault(e.path, e)
         out = []
         for c in data:
-            ex = by_path.get(c["path"])
+            ex = _resolve_exchange(exchanges, c["method"], c["path"])
             if ex:
                 out.append(Candidate(c["method"], ex.url, c["path"], c["location"],
                                      c["identifier_param"], c["param_location"],
@@ -88,6 +85,21 @@ def _load_identifiers(args, exchanges) -> list[Identifier]:
             data = json.load(fh)
         return [Identifier(i["value"], i["type"], i.get("source", "")) for i in data]
     return extract_identifiers(exchanges)
+
+
+def _resolve_exchange(exchanges, method, path):
+    """Pick the captured exchange to replay for a candidate: match on
+    (method, path), preferring one that carries a request body so form/json
+    substitution has something to replace. (A path can appear multiple times
+    — e.g. the GET form page and the POST submission — so keying on path
+    alone would pick the wrong one.)"""
+    matches = [e for e in exchanges if e.method == method and e.path == path]
+    if not matches:
+        return None
+    for e in matches:
+        if e.request_body:
+            return e
+    return matches[0]
 
 
 def _nonexistent_like(valid: str) -> str:
@@ -133,10 +145,6 @@ def _run_tests(args, exchanges) -> int:
     except json.JSONDecodeError as exc:
         print(f"Could not parse JSON input: {exc}")
         return 4
-    by_path = {}
-    for e in exchanges:
-        by_path.setdefault(e.path, e)
-
     hosts = {e.host for e in exchanges}
     allowed = args.scope or list(hosts)
 
@@ -149,7 +157,7 @@ def _run_tests(args, exchanges) -> int:
     skipped = 0
     headers = _parse_headers(args.header)
     for cand in candidates:
-        ex = by_path.get(cand.path)
+        ex = _resolve_exchange(exchanges, cand.method, cand.path)
         if ex is None:
             continue
         if not in_scope(ex.host, allowed):

@@ -100,3 +100,15 @@ def test_pick_values_numeric_baseline_matches_shape():
     known, nonexistent = cli._pick_values(cand, [], ex)
     assert known == ["3901"]
     assert nonexistent.isdigit() and nonexistent != "3901"
+
+
+def test_resolve_exchange_prefers_body_bearing_match():
+    def mk(method, body, status):
+        return HttpExchange(method, "https://h/fp", "h", 443, "https", "/fp",
+                            status, None, {}, body, {}, "", "", "")
+    get_form = mk("GET", "", 200)        # same path, no body
+    post_empty = mk("POST", "", 200)     # POST but no body
+    post_body = mk("POST", "email=chris@tm.com", 302)
+    ex = cli._resolve_exchange([get_form, post_empty, post_body], "POST", "/fp")
+    assert ex.method == "POST"
+    assert ex.request_body == "email=chris@tm.com"   # body-bearing POST preferred
