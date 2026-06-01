@@ -5,6 +5,8 @@ from collections import Counter
 
 from ..models import Response, SignalVerdict, Verdict
 
+_MIN_DIFF_LETTERS = 3   # changed text needs this many letters to count as a real message
+
 # volatile substrings that legitimately differ between requests
 _VOLATILE = [
     re.compile(r'value="[^"]*"'),                       # reflected form input
@@ -29,6 +31,19 @@ def _dominant_body(responses: list[Response]) -> str:
     return Counter(bodies).most_common(1)[0][0]
 
 
+def _diff_text(a: str, b: str) -> str:
+    """Concatenate only the segments that differ between a and b, so the
+    verdict depends on WHAT changed, not on how large the identical
+    surrounding page is."""
+    matcher = difflib.SequenceMatcher(None, a, b)
+    parts = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag != "equal":
+            parts.append(a[i1:i2])
+            parts.append(b[j1:j2])
+    return " ".join(p for p in parts if p)
+
+
 class ContentDetector:
     name = "content"
 
@@ -41,16 +56,14 @@ class ContentDetector:
         if v_body == n_body:
             return SignalVerdict(self.name, Verdict.NOT_DETECTED, "high",
                                  "normalized response bodies are identical")
-        ratio = difflib.SequenceMatcher(None, v_body, n_body).ratio()
-        if ratio >= 0.98:
+        diff = _diff_text(v_body, n_body)
+        letters = re.sub(r"[^A-Za-z]", "", diff)
+        if len(letters) < _MIN_DIFF_LETTERS:
             return SignalVerdict(
                 self.name, Verdict.NOT_DETECTED, "medium",
-                f"bodies near-identical (similarity {ratio:.2f}); "
-                f"difference likely incidental",
+                f"only incidental (non-textual) differences: {diff[:60]!r}",
             )
-        confidence = "high" if ratio < 0.9 else "medium"
         return SignalVerdict(
-            self.name, Verdict.VULNERABLE, confidence,
-            f"bodies differ (similarity {ratio:.2f}): "
-            f"valid~{v_body[:60]!r} vs nonexistent~{n_body[:60]!r}",
+            self.name, Verdict.VULNERABLE, "high",
+            f"response content differs in text: {diff[:120]!r}",
         )

@@ -34,8 +34,21 @@ def test_empty_bodies_inconclusive():
     assert v.verdict == Verdict.INCONCLUSIVE
 
 
-def test_near_identical_bodies_not_detected():
+def test_incidental_numeric_diff_not_detected():
+    # large identical page differing only by a numeric counter/id → incidental
     d = ContentDetector()
-    big = "the account page is here " * 40   # large, stable body
-    v = d.detect([_r(big + "aaaa")], [_r(big + "bbbb")])
-    assert v.verdict == Verdict.NOT_DETECTED   # >=0.98 similar → incidental
+    big = "the account page is here " * 40
+    v = d.detect([_r(big + "01")], [_r(big + "99")])
+    assert v.verdict == Verdict.NOT_DETECTED
+
+
+def test_small_message_in_large_page_detected():
+    # the real-world case: a short message differs inside an otherwise
+    # identical large page. Must be VULNERABLE regardless of page size.
+    d = ContentDetector()
+    chrome = "<html><head><title>Account</title></head><body>" + \
+             ("<div>navigation and footer filler</div>" * 200)
+    valid = [_r(chrome + "<p>Incorrect password</p></body></html>")]
+    nonexistent = [_r(chrome + "<p>User not found</p></body></html>")]
+    v = d.detect(valid, nonexistent)
+    assert v.verdict == Verdict.VULNERABLE
