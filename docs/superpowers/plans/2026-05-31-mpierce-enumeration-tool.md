@@ -2180,8 +2180,11 @@ plan as written. The committed code is authoritative; recorded here so the plan 
 misleading:
 
 - **Detectors (status/content):** status now returns INCONCLUSIVE when there is no strict
-  majority (tie no longer order-dependent); content returns NOT_DETECTED when bodies are
-  ≥0.98 similar (near-identical no longer flagged VULNERABLE).
+  majority (tie no longer order-dependent). Content judges differences by the changed text
+  segments (difflib opcodes) — VULNERABLE when the changed text contains real message
+  letters, NOT_DETECTED when the only difference is incidental/non-textual (counters, ids).
+  (This superseded an earlier whole-body `ratio >= 0.98` gate, which produced false
+  negatives by diluting a short message diff inside a large identical page.)
 - **Reflected identifiers (I1):** `http_tester._redact` strips the injected identifier value
   from response bodies before detectors run, preventing reflected-value false positives.
 - **Request substitution:** `parse_qsl(..., keep_blank_values=True)` so blank-valued params
