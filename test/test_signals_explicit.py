@@ -29,3 +29,9 @@ def test_no_tells_not_detected():
     d = ExplicitDetector()
     v = d.detect([_r("welcome")], [_r("welcome")])
     assert v.verdict == Verdict.NOT_DETECTED
+
+
+def test_no_comparable_responses_inconclusive():
+    d = ExplicitDetector()
+    v = d.detect([], [])
+    assert v.verdict == Verdict.INCONCLUSIVE

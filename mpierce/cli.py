@@ -6,7 +6,7 @@ import sys
 from .burp import parse_session
 from .identify import identify_candidates
 from .extract import extract_identifiers
-from .generate import random_email, random_username
+from .generate import random_email, random_numeric, random_username
 from .http_tester import in_scope, extract_param_value, test_candidate
 from .models import Candidate, Identifier
 from .report import write_json_report, render_console
@@ -86,27 +86,43 @@ def _load_identifiers(args, exchanges) -> list[Identifier]:
     return extract_identifiers(exchanges)
 
 
+def _nonexistent_like(valid: str) -> str:
+    """A guaranteed-nonexistent value shaped like `valid` so existence is the
+    only variable (not format)."""
+    if "@" in valid:
+        return random_email("test")
+    if valid.isdigit():
+        return random_numeric(len(valid))
+    return random_username("test")
+
+
 def _pick_value(candidate: Candidate, identifiers: list[Identifier],
                 exchange) -> tuple[str, str]:
-    """Return (valid_value, nonexistent_value) for a candidate."""
-    valid = None
-    for ident in identifiers:
-        if ident.type in ("email", "username") and "@" in ident.value and \
-                candidate.location in ("login", "forgot-password", "account-lookup",
-                                       "registration", "account-update"):
-            valid = ident.value
-            break
-    if valid is None and identifiers:
+    """Return (valid_value, nonexistent_value) for a candidate.
+
+    The value actually captured for this param is, by definition, valid for
+    this endpoint — prefer it. Then an identifier captured from the same
+    endpoint, then any identifier, then a safe default."""
+    valid = extract_param_value(exchange, candidate)
+    if not valid:
+        for ident in identifiers:
+            if ident.source == candidate.path:
+                valid = ident.value
+                break
+    if not valid and identifiers:
         valid = identifiers[0].value
-    if valid is None:
-        valid = extract_param_value(exchange, candidate) or "test@example.com"
-    nonexistent = random_email("test") if "@" in valid else random_username("test")
-    return valid, nonexistent
+    if not valid:
+        valid = "test@example.com"
+    return valid, _nonexistent_like(valid)
 
 
 def _run_tests(args, exchanges) -> int:
-    candidates = _load_candidates(args, exchanges)
-    identifiers = _load_identifiers(args, exchanges)
+    try:
+        candidates = _load_candidates(args, exchanges)
+        identifiers = _load_identifiers(args, exchanges)
+    except json.JSONDecodeError as exc:
+        print(f"Could not parse JSON input: {exc}")
+        return 4
     by_path = {e.path: e for e in exchanges}
 
     hosts = {e.host for e in exchanges}
@@ -150,7 +166,11 @@ def main(argv=None) -> int:
     exchanges = parse_session(args.xml)
 
     if args.command == "identify":
-        candidates = identify_candidates(exchanges)
+        try:
+            candidates = identify_candidates(exchanges)
+        except json.JSONDecodeError as exc:
+            print(f"LLM did not return valid JSON for identify: {exc}")
+            return 4
         data = [{"method": c.method, "path": c.path, "location": c.location,
                  "identifier_param": c.identifier_param,
                  "param_location": c.param_location, "reason": c.reason}
@@ -164,7 +184,11 @@ def main(argv=None) -> int:
         return 0
 
     if args.command == "extract":
-        identifiers = extract_identifiers(exchanges)
+        try:
+            identifiers = extract_identifiers(exchanges)
+        except json.JSONDecodeError as exc:
+            print(f"LLM did not return valid JSON for extract: {exc}")
+            return 4
         data = [{"value": i.value, "type": i.type, "source": i.source}
                 for i in identifiers]
         with open(args.out, "w") as fh:

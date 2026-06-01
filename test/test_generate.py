@@ -24,3 +24,12 @@ def test_random_email_custom_domain():
 def test_default_seed_when_none():
     u = random_username()
     assert re.fullmatch(r"user[0-9a-f]{12}", u)
+
+
+def test_random_numeric_width_and_freshness():
+    from mpierce.generate import random_numeric
+    a = random_numeric(8)
+    b = random_numeric(8)
+    assert a.isdigit()
+    assert len(a) == 8
+    assert a != b

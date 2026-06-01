@@ -33,3 +33,16 @@ def test_extract_identifiers_uses_injected_llm():
             return M()
     idents = extract_identifiers([_ex("/login", "email=jl@rdpt.io")], llm=FakeLLM())
     assert idents[0].value == "jl@rdpt.io"
+
+
+def test_summarize_with_responses_includes_response_body():
+    from mpierce.extract import _summarize_with_responses
+    from mpierce.models import HttpExchange
+    ex = HttpExchange(method="GET", url="https://h/u", host="h", port=443,
+                      protocol="https", path="/u", status=200, mimetype="JSON",
+                      request_headers={}, request_body="", response_headers={},
+                      response_body="account id 5551 found", raw_request="",
+                      raw_response="")
+    s = _summarize_with_responses([ex])
+    assert "5551" in s
+    assert "/u" in s

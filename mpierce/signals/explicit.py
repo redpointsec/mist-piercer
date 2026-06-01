@@ -30,6 +30,11 @@ class ExplicitDetector:
     name = "explicit"
 
     def detect(self, valid: list[Response], nonexistent: list[Response]) -> SignalVerdict:
+        v_clean = [r for r in valid if r.error is None]
+        n_clean = [r for r in nonexistent if r.error is None]
+        if not v_clean or not n_clean:
+            return SignalVerdict(self.name, Verdict.INCONCLUSIVE, "low",
+                                 "no comparable responses")
         v_tells = _tells(valid)
         n_tells = _tells(nonexistent)
         diff = v_tells.symmetric_difference(n_tells)
