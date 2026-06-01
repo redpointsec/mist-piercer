@@ -1585,6 +1585,23 @@ def test_dry_run_does_not_send(monkeypatch):
     planned = http_tester.replay(_ex(), _cand(), "x@y.com", samples=2, rate=1000,
                                  dry_run=True)
     assert planned == []   # dry run returns no responses, sends nothing
+
+
+def test_reflected_identifier_is_redacted(monkeypatch):
+    # the app merely echoes the submitted value; bodies are otherwise identical.
+    # after redaction both read "No results for <IDENTIFIER>" → not a real signal.
+    def fake_send(req, timeout):
+        value = req["body"].split("email=")[1].split("&")[0]
+        return Response(status=200, headers={}, body=f"No results for {value}",
+                        elapsed_ms=10.0)
+    monkeypatch.setattr(http_tester, "send_request", fake_send)
+    finding = http_tester.test_candidate(
+        _ex(), _cand(),
+        valid_value="jl@rdpt.io", nonexistent_value="zzz@none.com",
+        samples=3, rate=1000,
+    )
+    signals = {v.signal: v.verdict for v in finding.verdicts}
+    assert signals["content"] == Verdict.NOT_DETECTED
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1637,14 +1654,38 @@ def replay(exchange: HttpExchange, candidate: Candidate, value: str,
     return responses
 
 
+def _redact(responses: list[Response], token: str,
+            placeholder: str = "<IDENTIFIER>") -> list[Response]:
+    """Replace echoes of the injected identifier value in response bodies so
+    detectors compare structure/messages, not the reflected value itself.
+    Without this, an app that simply echoes the submitted value (e.g.
+    "No results for {value}") would make every detector see a body difference
+    and report a false positive."""
+    if not token:
+        return responses
+    pattern = re.compile(re.escape(token), re.IGNORECASE)
+    return [
+        Response(status=r.status, headers=r.headers,
+                 body=pattern.sub(placeholder, r.body),
+                 elapsed_ms=r.elapsed_ms, error=r.error)
+        for r in responses
+    ]
+
+
 def test_candidate(exchange: HttpExchange, candidate: Candidate,
                    valid_value: str, nonexistent_value: str,
                    samples: int = 5, rate: float = 3.0, timeout: float = 10.0,
                    extra_headers: dict | None = None) -> Finding:
-    """Replay valid vs nonexistent value and run every detector."""
-    valid = replay(exchange, candidate, valid_value, samples, rate, timeout, extra_headers)
-    nonexistent = replay(exchange, candidate, nonexistent_value, samples, rate, timeout,
-                         extra_headers)
+    """Replay valid vs nonexistent value and run every detector.
+
+    Each side's response bodies are redacted of the injected identifier value
+    so detectors compare structure/messages, not the echoed value itself."""
+    valid = _redact(
+        replay(exchange, candidate, valid_value, samples, rate, timeout, extra_headers),
+        valid_value)
+    nonexistent = _redact(
+        replay(exchange, candidate, nonexistent_value, samples, rate, timeout, extra_headers),
+        nonexistent_value)
     verdicts = [d.detect(valid, nonexistent) for d in get_detectors()]
     return Finding(candidate=candidate, identifier_param=candidate.identifier_param,
                    valid_value=valid_value, nonexistent_value=nonexistent_value,
@@ -1654,7 +1695,7 @@ def test_candidate(exchange: HttpExchange, candidate: Candidate,
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest test/test_http_tester_replay.py -v`
-Expected: PASS (3 tests).
+Expected: PASS (4 tests).
 
 - [ ] **Step 5: Commit**
 
