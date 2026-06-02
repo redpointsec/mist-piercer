@@ -112,3 +112,15 @@ def test_resolve_exchange_prefers_body_bearing_match():
     ex = cli._resolve_exchange([get_form, post_empty, post_body], "POST", "/fp")
     assert ex.method == "POST"
     assert ex.request_body == "email=chris@tm.com"   # body-bearing POST preferred
+
+
+def test_pick_values_scopes_to_endpoint_source():
+    ex = _exchanges()[0]   # POST /login, body email=jl@rdpt.io
+    cand = Candidate("POST", "https://vtm.rdpt.dev/login", "/login", "login",
+                     "email", "form", "r")
+    idents = [Identifier("alice@x.com", "email", "/other"),     # different endpoint
+              Identifier("bob@x.com", "email", "/login")]       # this endpoint
+    known, _ = cli._pick_values(cand, idents, ex)
+    assert "bob@x.com" in known          # same-endpoint identifier used
+    assert "alice@x.com" not in known    # other-endpoint identifier excluded
+    assert "jl@rdpt.io" in known         # captured value still included

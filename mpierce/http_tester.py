@@ -126,10 +126,14 @@ def _redact(responses: list[Response], token: str,
     detectors compare structure/messages, not the reflected value itself.
     Without this, an app that simply echoes the submitted value (e.g.
     "No results for {value}") would make every detector see a body difference
-    and report a false positive."""
+    and report a false positive.
+
+    Matches only on word boundaries so a short value (e.g. "foo") doesn't
+    redact inside unrelated words (e.g. "footer") — which would itself
+    manufacture a spurious content difference."""
     if not token:
         return responses
-    pattern = re.compile(re.escape(token), re.IGNORECASE)
+    pattern = re.compile(r"(?<!\w)" + re.escape(token) + r"(?!\w)", re.IGNORECASE)
     return [
         Response(status=r.status, headers=r.headers,
                  body=pattern.sub(placeholder, r.body),

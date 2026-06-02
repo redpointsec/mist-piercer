@@ -78,3 +78,10 @@ def test_send_request_error_returns_response_with_error(monkeypatch):
                                   "headers": {}, "body": ""})
     assert r.status is None
     assert r.error is not None
+
+
+def test_redact_matches_whole_token_not_substring():
+    # a short value like "foo" must not redact inside "footer"/"food"
+    resps = [Response(status=200, headers={}, body="footer foo food", elapsed_ms=1.0)]
+    out = http_tester._redact(resps, "foo")
+    assert out[0].body == "footer <IDENTIFIER> food"
