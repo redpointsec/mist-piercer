@@ -10,7 +10,7 @@ import requests
 # keep '@' unencoded so email-address values remain human-readable in payloads.
 _quote_safe_at = lambda s, safe, encoding=None, errors=None: quote(s, safe=safe + "@", encoding=encoding, errors=errors)
 
-from .models import Candidate, Finding, HttpExchange, Response
+from .models import Candidate, Finding, HttpExchange, Response, ValueResult
 from .signals import get_detectors
 
 
@@ -126,10 +126,14 @@ def _redact(responses: list[Response], token: str,
     detectors compare structure/messages, not the reflected value itself.
     Without this, an app that simply echoes the submitted value (e.g.
     "No results for {value}") would make every detector see a body difference
-    and report a false positive."""
+    and report a false positive.
+
+    Matches only on word boundaries so a short value (e.g. "foo") doesn't
+    redact inside unrelated words (e.g. "footer") — which would itself
+    manufacture a spurious content difference."""
     if not token:
         return responses
-    pattern = re.compile(re.escape(token), re.IGNORECASE)
+    pattern = re.compile(r"(?<!\w)" + re.escape(token) + r"(?!\w)", re.IGNORECASE)
     return [
         Response(status=r.status, headers=r.headers,
                  body=pattern.sub(placeholder, r.body),
@@ -139,24 +143,25 @@ def _redact(responses: list[Response], token: str,
 
 
 def test_candidate(exchange: HttpExchange, candidate: Candidate,
-                   valid_value: str, nonexistent_value: str,
+                   known_values: list[str], nonexistent_value: str,
                    samples: int = 5, rate: float = 3.0, timeout: float = 10.0,
                    extra_headers: dict | None = None, dry_run: bool = False) -> Finding:
-    """Replay valid vs nonexistent value and run every detector.
-
-    Each side's response bodies are redacted of the injected identifier value
-    so detectors compare structure/messages, not the echoed value itself.
-    When dry_run is True, replay sends nothing and returns [], so every detector
-    reports INCONCLUSIVE."""
-    valid = _redact(
-        replay(exchange, candidate, valid_value, samples, rate, timeout,
-               extra_headers, dry_run=dry_run),
-        valid_value)
-    nonexistent = _redact(
+    """Replay a guaranteed-nonexistent baseline plus each known identifier
+    value, then flag every known value whose responses differ from the
+    baseline (the app reveals it exists). Response bodies are redacted of the
+    injected value before detection so reflected echoes don't create signal.
+    When dry_run is True nothing is sent and every result is INCONCLUSIVE."""
+    baseline = _redact(
         replay(exchange, candidate, nonexistent_value, samples, rate, timeout,
                extra_headers, dry_run=dry_run),
         nonexistent_value)
-    verdicts = [d.detect(valid, nonexistent) for d in get_detectors()]
+    results = []
+    for value in known_values:
+        responses = _redact(
+            replay(exchange, candidate, value, samples, rate, timeout,
+                   extra_headers, dry_run=dry_run),
+            value)
+        verdicts = [d.detect(responses, baseline) for d in get_detectors()]
+        results.append(ValueResult(value=value, verdicts=verdicts))
     return Finding(candidate=candidate, identifier_param=candidate.identifier_param,
-                   valid_value=valid_value, nonexistent_value=nonexistent_value,
-                   verdicts=verdicts)
+                   nonexistent_value=nonexistent_value, results=results)

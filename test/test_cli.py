@@ -80,22 +80,47 @@ def test_identify_handles_bad_llm_json(monkeypatch, capsys):
     assert "json" in capsys.readouterr().out.lower()
 
 
-def test_pick_value_prefers_original_param_value():
+def test_pick_values_includes_captured_and_identifiers():
     ex = _exchanges()[0]   # request_body "email=jl@rdpt.io&password=x"
     cand = Candidate("POST", "https://vtm.rdpt.dev/login", "/login", "login",
                      "email", "form", "r")
-    valid, nonexistent = cli._pick_value(cand, [], ex)
-    assert valid == "jl@rdpt.io"
-    assert "@" in nonexistent and nonexistent != valid
+    known, nonexistent = cli._pick_values(cand, [Identifier("alice@x.com", "email", "/login")], ex)
+    assert "jl@rdpt.io" in known        # captured value included
+    assert "alice@x.com" in known       # supplied identifier included
+    assert "@" in nonexistent
 
 
-def test_pick_value_numeric_baseline_matches_shape():
+def test_pick_values_numeric_baseline_matches_shape():
     ex = HttpExchange(method="GET", url="https://h/user/3901", host="h", port=443,
                       protocol="https", path="/user/3901", status=200, mimetype="JSON",
                       request_headers={}, request_body="", response_headers={},
                       response_body="", raw_request="", raw_response="")
     cand = Candidate("GET", "https://h/user/3901", "/user/3901", "account-lookup",
                      "id", "path", "r")
-    valid, nonexistent = cli._pick_value(cand, [], ex)
-    assert valid == "3901"
+    known, nonexistent = cli._pick_values(cand, [], ex)
+    assert known == ["3901"]
     assert nonexistent.isdigit() and nonexistent != "3901"
+
+
+def test_resolve_exchange_prefers_body_bearing_match():
+    def mk(method, body, status):
+        return HttpExchange(method, "https://h/fp", "h", 443, "https", "/fp",
+                            status, None, {}, body, {}, "", "", "")
+    get_form = mk("GET", "", 200)        # same path, no body
+    post_empty = mk("POST", "", 200)     # POST but no body
+    post_body = mk("POST", "email=chris@tm.com", 302)
+    ex = cli._resolve_exchange([get_form, post_empty, post_body], "POST", "/fp")
+    assert ex.method == "POST"
+    assert ex.request_body == "email=chris@tm.com"   # body-bearing POST preferred
+
+
+def test_pick_values_scopes_to_endpoint_source():
+    ex = _exchanges()[0]   # POST /login, body email=jl@rdpt.io
+    cand = Candidate("POST", "https://vtm.rdpt.dev/login", "/login", "login",
+                     "email", "form", "r")
+    idents = [Identifier("alice@x.com", "email", "/other"),     # different endpoint
+              Identifier("bob@x.com", "email", "/login")]       # this endpoint
+    known, _ = cli._pick_values(cand, idents, ex)
+    assert "bob@x.com" in known          # same-endpoint identifier used
+    assert "alice@x.com" not in known    # other-endpoint identifier excluded
+    assert "jl@rdpt.io" in known         # captured value still included

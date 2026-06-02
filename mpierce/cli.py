@@ -38,9 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="extra HTTP header 'Name: Value' (repeatable)")
         p.add_argument("--confirm", action="store_true", help="required to send live HTTP")
         p.add_argument("--dry-run", action="store_true")
-        p.add_argument("--samples", type=int, default=5)
+        p.add_argument("--samples", type=int, default=1,
+                       help="samples per value (raise to 5+ to enable the timing signal)")
         p.add_argument("--rate", type=float, default=3.0)
         p.add_argument("--timeout", type=float, default=10.0)
+        p.add_argument("--max-values", type=int, default=25,
+                       help="max known values to test per candidate")
         p.add_argument("--output", help="write JSON report to this path")
 
     p_test = sub.add_parser("test", help="live-test candidates for enumeration")
@@ -66,10 +69,9 @@ def _load_candidates(args, exchanges) -> list[Candidate]:
     if getattr(args, "candidates", None):
         with open(args.candidates) as fh:
             data = json.load(fh)
-        by_path = {e.path: e for e in exchanges}
         out = []
         for c in data:
-            ex = by_path.get(c["path"])
+            ex = _resolve_exchange(exchanges, c["method"], c["path"])
             if ex:
                 out.append(Candidate(c["method"], ex.url, c["path"], c["location"],
                                      c["identifier_param"], c["param_location"],
@@ -86,6 +88,21 @@ def _load_identifiers(args, exchanges) -> list[Identifier]:
     return extract_identifiers(exchanges)
 
 
+def _resolve_exchange(exchanges, method, path):
+    """Pick the captured exchange to replay for a candidate: match on
+    (method, path), preferring one that carries a request body so form/json
+    substitution has something to replace. (A path can appear multiple times
+    — e.g. the GET form page and the POST submission — so keying on path
+    alone would pick the wrong one.)"""
+    matches = [e for e in exchanges if e.method == method and e.path == path]
+    if not matches:
+        return None
+    for e in matches:
+        if e.request_body:
+            return e
+    return matches[0]
+
+
 def _nonexistent_like(valid: str) -> str:
     """A guaranteed-nonexistent value shaped like `valid` so existence is the
     only variable (not format)."""
@@ -96,24 +113,36 @@ def _nonexistent_like(valid: str) -> str:
     return random_username("test")
 
 
-def _pick_value(candidate: Candidate, identifiers: list[Identifier],
-                exchange) -> tuple[str, str]:
-    """Return (valid_value, nonexistent_value) for a candidate.
+def _pick_values(candidate: Candidate, identifiers: list[Identifier],
+                 exchange) -> tuple[list[str], str]:
+    """Return (known_values, nonexistent_baseline) for a candidate.
 
-    The value actually captured for this param is, by definition, valid for
-    this endpoint — prefer it. Then an identifier captured from the same
-    endpoint, then any identifier, then a safe default."""
-    valid = extract_param_value(exchange, candidate)
-    if not valid:
-        for ident in identifiers:
-            if ident.source == candidate.path:
-                valid = ident.value
-                break
-    if not valid and identifiers:
-        valid = identifiers[0].value
-    if not valid:
-        valid = "test@example.com"
-    return valid, _nonexistent_like(valid)
+    Known values are scoped to THIS endpoint: identifiers harvested from the
+    candidate's own path are used first. Only if none match do we fall back to
+    shape-compatible identifiers. The captured param value is always included.
+    Scoping is what keeps a run small and on-target — without it every endpoint
+    would be tested against every identifier."""
+    captured = extract_param_value(exchange, candidate)
+    shape = captured or (identifiers[0].value if identifiers else "test@example.com")
+
+    def fits(v: str) -> bool:
+        if "@" in shape:
+            return "@" in v
+        if shape.isdigit():
+            return v.isdigit()
+        return "@" not in v and not v.isdigit()   # username-like
+
+    # 1. identifiers captured from this exact endpoint
+    known = [i.value for i in identifiers if i.source == candidate.path]
+    # 2. fall back to shape-compatible identifiers only if the endpoint had none
+    if not known:
+        known = [i.value for i in identifiers if fits(i.value)]
+    if captured:
+        known.append(captured)
+    known = list(dict.fromkeys(known))   # dedup, preserve order
+    if not known:
+        known = [shape]
+    return known, _nonexistent_like(known[0])
 
 
 def _run_tests(args, exchanges) -> int:
@@ -123,8 +152,6 @@ def _run_tests(args, exchanges) -> int:
     except json.JSONDecodeError as exc:
         print(f"Could not parse JSON input: {exc}")
         return 4
-    by_path = {e.path: e for e in exchanges}
-
     hosts = {e.host for e in exchanges}
     allowed = args.scope or list(hosts)
 
@@ -136,21 +163,39 @@ def _run_tests(args, exchanges) -> int:
     findings = []
     skipped = 0
     headers = _parse_headers(args.header)
+    print(f"[*] {len(candidates)} candidate(s) to test "
+          f"({'DRY RUN — no traffic' if args.dry_run else f'live, {args.rate}/s'})",
+          file=sys.stderr)
     for cand in candidates:
-        ex = by_path.get(cand.path)
+        ex = _resolve_exchange(exchanges, cand.method, cand.path)
         if ex is None:
+            print(f"[!] skip {cand.method} {cand.path}: no captured request matches",
+                  file=sys.stderr)
             continue
         if not in_scope(ex.host, allowed):
-            print(f"Skipping out-of-scope host {ex.host} (allowed: {allowed}).")
+            print(f"[!] skip out-of-scope host {ex.host} (allowed: {allowed})",
+                  file=sys.stderr)
             skipped += 1
             continue
-        valid_value, nonexistent_value = _pick_value(cand, identifiers, ex)
-        finding = test_candidate(ex, cand, valid_value, nonexistent_value,
+        known_values, nonexistent_value = _pick_values(cand, identifiers, ex)
+        if len(known_values) > args.max_values:
+            print(f"[*] {cand.path}: capping {len(known_values)} values to "
+                  f"{args.max_values} (raise with --max-values)", file=sys.stderr)
+            known_values = known_values[:args.max_values]
+        print(f"[*] {cand.method} {cand.path} ({cand.location}): "
+              f"{len(known_values)} value(s) + baseline, "
+              f"{(len(known_values) + 1) * args.samples} request(s)", file=sys.stderr)
+        finding = test_candidate(ex, cand, known_values, nonexistent_value,
                                  samples=args.samples, rate=args.rate,
                                  timeout=args.timeout, extra_headers=headers,
                                  dry_run=args.dry_run)
+        hits = sum(1 for r in finding.results if r.enumerable)
+        print(f"    -> {hits} enumerable value(s)", file=sys.stderr)
         findings.append(finding)
 
+    if not findings and not skipped:
+        print("[!] No candidates resolved to captured requests — nothing tested.",
+              file=sys.stderr)
     print(render_console(findings))
     if args.output:
         write_json_report(findings, args.output)

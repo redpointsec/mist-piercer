@@ -1,6 +1,6 @@
 # test/test_models.py
 from mpierce.models import (
-    HttpExchange, Candidate, Identifier, Response, SignalVerdict, Finding, Verdict,
+    HttpExchange, Candidate, Identifier, Response, SignalVerdict, Finding, ValueResult, Verdict,
 )
 
 
@@ -29,7 +29,8 @@ def test_dataclasses_construct():
     assert resp.elapsed_ms == 12.0
     sv = SignalVerdict(signal="status", verdict=Verdict.VULNERABLE,
                        confidence="high", evidence="200 vs 404")
+    vr = ValueResult(value="a@b.com", verdicts=[sv])
+    assert vr.enumerable is True
     finding = Finding(candidate=cand, identifier_param="email",
-                      valid_value="a@b.com", nonexistent_value="z@b.com",
-                      verdicts=[sv])
-    assert finding.verdicts[0].signal == "status"
+                      nonexistent_value="z@b.com", results=[vr])
+    assert finding.results[0].verdicts[0].signal == "status"
